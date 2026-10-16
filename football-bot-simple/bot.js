@@ -1,5 +1,6 @@
 // ⚽ Football Prediction Bot — Version simplifiée
 // Backend : fichier JSON (aucune base de données)
+// Données : football-data.org (gratuit à vie : 5 grands championnats + C1)
 // Paiement : Telegram Stars (automatique) + Mobile Money (validation admin)
 // Dépendances : telegraf, axios, dotenv — c'est tout !
 
@@ -13,14 +14,14 @@ const http = require('http');
 // ────────────────────────────────
 // CONFIGURATION
 // ────────────────────────────────
+// Codes compétitions football-data.org (toutes gratuites à vie)
 const LEAGUES = {
-  39: '🏴 Premier League',
-  140: '🇪🇸 La Liga',
-  135: '🇮🇹 Serie A',
-  78: '🇩🇪 Bundesliga',
-  61: '🇫🇷 Ligue 1',
-  2: '🏆 Ligue des Champions',
-  3: '🥈 Ligue Europa',
+  PL: '🏴 Premier League',
+  PD: '🇪🇸 La Liga',
+  SA: '🇮🇹 Serie A',
+  BL1: '🇩🇪 Bundesliga',
+  FL1: '🇫🇷 Ligue 1',
+  CL: '🏆 Ligue des Champions',
 };
 
 const PLANS = {
@@ -75,22 +76,60 @@ function grantPremium(id, plan) {
 }
 
 // ────────────────────────────────
-// API-FOOTBALL (avec mini-cache 5 min)
+// API football-data.org v4 (avec mini-cache 5 min)
+// Compte gratuit : 10 requêtes/min, 5 grands championnats + C1 inclus à vie
 // ────────────────────────────────
 const api = axios.create({
-  baseURL: 'https://v3.football.api-sports.io',
-  headers: { 'x-apisports-key': process.env.API_FOOTBALL_KEY },
+  baseURL: 'https://api.football-data.org/v4',
+  headers: { 'X-Auth-Token': process.env.FOOTBALL_DATA_KEY },
   timeout: 10000,
 });
 
 const apiCache = new Map();
-async function apiGet(endpoint, params) {
-  const key = endpoint + JSON.stringify(params);
-  const hit = apiCache.get(key);
+async function apiGet(url) {
+  const hit = apiCache.get(url);
   if (hit && Date.now() - hit.t < 5 * 60 * 1000) return hit.data;
-  const res = await api.get(endpoint, { params });
-  apiCache.set(key, { t: Date.now(), data: res.data.response });
-  return res.data.response;
+  const res = await api.get(url);
+  apiCache.set(url, { t: Date.now(), data: res.data });
+  return res.data;
+}
+
+// Matchs du jour : 1 seule requête si possible, sinon 1 par compétition
+async function getTodayMatches() {
+  const d = new Date().toLocaleDateString('en-CA', { timeZone: TZ }); // YYYY-MM-DD
+  try {
+    const data = await apiGet('/matches?dateFrom=' + d + '&dateTo=' + d);
+    const list = (data.matches || []).filter((m) => LEAGUES[m.competition.code]);
+    if (list.length) return list;
+  } catch (e) { console.error('getTodayMatches /matches :', e.message); }
+  // Repli : une requête par compétition
+  const results = [];
+  for (const code of Object.keys(LEAGUES)) {
+    try {
+      const data = await apiGet('/competitions/' + code + '/matches?dateFrom=' + d + '&dateTo=' + d);
+      for (const m of data.matches || []) results.push(m);
+    } catch (e) { console.error('getTodayMatches ' + code + ' :', e.message); }
+  }
+  return results;
+}
+
+async function getMatchById(id) {
+  try {
+    const data = await apiGet('/matches/' + id);
+    return data;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Derniers matchs terminés d'une équipe
+async function getTeamFinishedMatches(teamId) {
+  try {
+    const data = await apiGet('/teams/' + teamId + '/matches?status=FINISHED');
+    return data.matches || [];
+  } catch (e) {
+    return [];
+  }
 }
 
 // ────────────────────────────────
@@ -100,12 +139,14 @@ function esc(s) {
   return String(s || '').replace(/([_*\[])/g, '\\$1');
 }
 
-function today() {
-  return new Date().toLocaleDateString('en-CA', { timeZone: TZ }); // YYYY-MM-DD
-}
-
 function matchTime(dateStr) {
   return new Date(dateStr).toLocaleTimeString('fr-FR', { timeZone: TZ, hour: '2-digit', minute: '2-digit' });
+}
+
+function scoreOf(m) {
+  const ft = m.score && m.score.fullTime;
+  if (ft && (ft.home !== null || ft.away !== null)) return ft.home + '-' + ft.away;
+  return '0-0';
 }
 
 function menuKeyboard() {
@@ -119,14 +160,14 @@ function menuKeyboard() {
 // MOTEUR DE PRÉDICTION
 // Basé sur les 5 derniers matchs de chaque équipe
 // ────────────────────────────────
-function analyzeLastFixtures(teamId, fixtures) {
+function analyzeLastMatches(teamId, matches) {
   let points = 0, scored = 0, conceded = 0, n = 0;
-  for (const f of fixtures) {
-    if (f.fixture.status.short !== 'FT') continue;
-    const isHome = f.teams.home.id === teamId;
-    const gf = isHome ? f.goals.home : f.goals.away;
-    const ga = isHome ? f.goals.away : f.goals.home;
-    if (gf === null || ga === null) continue;
+  for (const m of matches.slice(-5)) {
+    const isHome = m.homeTeam.id === teamId;
+    const ft = m.score.fullTime;
+    if (!ft || ft.home === null || ft.away === null) continue;
+    const gf = isHome ? ft.home : ft.away;
+    const ga = isHome ? ft.away : ft.home;
     points += gf > ga ? 3 : (gf === ga ? 1 : 0);
     scored += gf;
     conceded += ga;
@@ -170,15 +211,13 @@ function predict(homeStats, awayStats) {
   return { pH, pD, pA, score, over25, btts, winner };
 }
 
-async function buildPrediction(fixture) {
-  const homeId = fixture.teams.home.id;
-  const awayId = fixture.teams.away.id;
-  const [homeFixtures, awayFixtures] = await Promise.all([
-    apiGet('/fixtures', { team: homeId, last: 5 }),
-    apiGet('/fixtures', { team: awayId, last: 5 }),
+async function buildPrediction(match) {
+  const [homeMatches, awayMatches] = await Promise.all([
+    getTeamFinishedMatches(match.homeTeam.id),
+    getTeamFinishedMatches(match.awayTeam.id),
   ]);
-  const homeStats = analyzeLastFixtures(homeId, homeFixtures);
-  const awayStats = analyzeLastFixtures(awayId, awayFixtures);
+  const homeStats = analyzeLastMatches(match.homeTeam.id, homeMatches);
+  const awayStats = analyzeLastMatches(match.awayTeam.id, awayMatches);
   return predict(homeStats, awayStats);
 }
 
@@ -210,19 +249,19 @@ async function handleMatches(ctx) {
   if (ctx.answerCbQuery) ctx.answerCbQuery().catch(() => {});
   const wait = await ctx.reply('🔄 Chargement...');
   try {
-    const fixtures = await apiGet('/fixtures', { date: today(), timezone: TZ });
-    const big = fixtures.filter((f) => LEAGUES[f.league.id]);
-    const list = (big.length ? big : fixtures).slice(0, 10);
+    const list = (await getTodayMatches()).slice(0, 10);
     if (!list.length) {
-      await ctx.reply('📭 Aucun match trouvé aujourd\'hui.');
+      await ctx.reply('📭 Aucun match aujourd\'hui dans les grandes compétitions.');
     } else {
       let msg = '⚽ *MATCHS DU JOUR*\n\n';
-      for (const f of list) {
-        const status = f.fixture.status.short;
-        const time = status === 'NS' ? matchTime(f.fixture.date) : status + ' ' + f.goals.home + '-' + f.goals.away;
-        msg += (LEAGUES[f.league.id] || f.league.name) + '\n' +
-          esc(f.teams.home.name) + ' vs ' + esc(f.teams.away.name) + ' — ' + time + '\n' +
-          '🔮 /pred_' + f.fixture.id + '\n\n';
+      for (const m of list) {
+        let time;
+        if (m.status === 'IN_PLAY' || m.status === 'PAUSED') time = '🔴 ' + scoreOf(m);
+        else if (m.status === 'FINISHED') time = 'FT ' + scoreOf(m);
+        else time = matchTime(m.utcDate);
+        msg += (LEAGUES[m.competition.code] || m.competition.name) + '\n' +
+          esc(m.homeTeam.name) + ' vs ' + esc(m.awayTeam.name) + ' — ' + time + '\n' +
+          '🔮 /pred_' + m.id + '\n\n';
       }
       await ctx.replyWithMarkdown(msg);
     }
@@ -240,17 +279,16 @@ async function handleLive(ctx) {
   if (ctx.answerCbQuery) ctx.answerCbQuery().catch(() => {});
   const wait = await ctx.reply('🔄 Chargement...');
   try {
-    const fixtures = await apiGet('/fixtures', { live: 'all' });
-    const big = fixtures.filter((f) => LEAGUES[f.league.id]);
-    const list = (big.length ? big : fixtures).slice(0, 12);
+    const list = (await getTodayMatches())
+      .filter((m) => m.status === 'IN_PLAY' || m.status === 'PAUSED')
+      .slice(0, 12);
     if (!list.length) {
-      await ctx.reply('📭 Aucun match en cours actuellement.');
+      await ctx.reply('📭 Aucun match en cours. Tape /matchs pour les prochains.\n(Le plan gratuit peut avoir un léger retard sur les scores en direct.)');
     } else {
       let msg = '⚡ *EN DIRECT*\n\n';
-      for (const f of list) {
-        msg += (LEAGUES[f.league.id] || f.league.name) + '\n' +
-          esc(f.teams.home.name) + ' ' + f.goals.home + ' - ' + f.goals.away + ' ' + esc(f.teams.away.name) +
-          ' (' + f.fixture.status.elapsed + "' )\n\n";
+      for (const m of list) {
+        msg += (LEAGUES[m.competition.code] || m.competition.name) + '\n' +
+          esc(m.homeTeam.name) + ' ' + scoreOf(m) + ' ' + esc(m.awayTeam.name) + ' (' + m.score.minuteOrStatus || '...' + ')\n\n';
       }
       await ctx.replyWithMarkdown(msg);
     }
@@ -267,15 +305,15 @@ bot.action('live', handleLive);
 bot.hears(/^\/pred_(\d+)$/, async (ctx) => {
   const wait = await ctx.reply('🔮 Calcul de la prédiction...');
   try {
-    const fixture = (await apiGet('/fixtures', { id: ctx.match[1] }))[0];
-    if (!fixture) {
+    const m = await getMatchById(ctx.match[1]);
+    if (!m) {
       await ctx.reply('❌ Match introuvable.');
     } else {
-      const p = await buildPrediction(fixture);
+      const p = await buildPrediction(m);
       const premium = isPremium(getUser(ctx.from.id));
       let msg =
-        '🔮 *PRÉDICTION*\n' + (LEAGUES[fixture.league.id] || fixture.league.name) + '\n' +
-        esc(fixture.teams.home.name) + ' vs ' + esc(fixture.teams.away.name) + '\n\n' +
+        '🔮 *PRÉDICTION*\n' + (LEAGUES[m.competition.code] || m.competition.name) + '\n' +
+        esc(m.homeTeam.name) + ' vs ' + esc(m.awayTeam.name) + ' — ' + matchTime(m.utcDate) + '\n\n' +
         '1 : ' + p.pH + '%   X : ' + p.pD + '%   2 : ' + p.pA + '%\n' +
         '👉 Pronostic : *' + p.winner + '*\n';
       if (premium) {

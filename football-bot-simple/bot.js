@@ -288,7 +288,7 @@ async function handleLive(ctx) {
       let msg = '⚡ *EN DIRECT*\n\n';
       for (const m of list) {
         msg += (LEAGUES[m.competition.code] || m.competition.name) + '\n' +
-          esc(m.homeTeam.name) + ' ' + scoreOf(m) + ' ' + esc(m.awayTeam.name) + ' (' + m.score.minuteOrStatus || '...' + ')\n\n';
+          esc(m.homeTeam.name) + ' ' + scoreOf(m) + ' ' + esc(m.awayTeam.name) + ' 🔴\n\n';
       }
       await ctx.replyWithMarkdown(msg);
     }

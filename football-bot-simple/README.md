@@ -1,6 +1,6 @@
 # ⚽ Football Prediction Bot — Version simplifiée
 
-Bot Telegram de pronostics foot **ultra-simple** : 1 seul fichier, aucune base de données, aucune API de paiement tierce.
+Bot Telegram de pronostics foot **ultra-simple** : 1 seul fichier, aucune base de données, aucune API de paiement tierce, données des 5 grands championnats **gratuites à vie**.
 
 ## Ce qui a changé vs l'ancienne version
 
@@ -8,6 +8,7 @@ Bot Telegram de pronostics foot **ultra-simple** : 1 seul fichier, aucune base d
 |---|---|
 | MongoDB (Atlas) | Fichier `data.json` |
 | Express + serveur webhook | Long polling (aucune config serveur) |
+| API-Football (plan gratuit limité, grands championnats payants) | **football-data.org** : 5 grands championnats + Ligue des Champions gratuits à vie |
 | API MTN MoMo + Orange Money (comptes marchands) | ⭐ Telegram Stars (automatique) + Mobile Money validé par l'admin |
 | node-cron, notifications, winston, moment… | Supprimés |
 | 9 dépendances, ~20 fichiers | 3 dépendances, 1 fichier (`bot.js`) |
@@ -24,7 +25,7 @@ npm start
 ## 🔑 Obtenir les clés
 
 1. **BOT_TOKEN** : [@BotFather](https://t.me/BotFather) → /newbot
-2. **API_FOOTBALL_KEY** : [dashboard.api-football.com](https://dashboard.api-football.com) (compte gratuit : 100 requêtes/jour)
+2. **FOOTBALL_DATA_KEY** : inscription gratuite sur [football-data.org](https://www.football-data.org/client/register) — le plan gratuit couvre pour toujours les 5 grands championnats (PL, La Liga, Serie A, Bundesliga, Ligue 1) + la Ligue des Champions (limite : 10 requêtes/min, le bot a déjà un cache de 5 min intégré)
 3. **ADMIN_IDS** : ton ID Telegram via [@userinfobot](https://t.me/userinfobot)
 4. **MTN_NUMBER / ORANGE_NUMBER** : les numéros qui recevront les paiements Mobile Money
 
@@ -61,6 +62,7 @@ npm start
 
 ## 📝 Notes
 
-- Le plan gratuit d'API-Football (100 req/jour) ne couvre que certaines ligues et saisons. Pour les 5 grands championnats en direct, le plan Basic (~10 $/mois) est nécessaire.
+- **football-data.org** : le plan gratuit inclut 12 compétitions dont les 5 grands championnats + C1, pour toujours. Limite : 10 requêtes/min (le cache 5 min du bot évite la plupart des erreurs 429). Les scores en direct en temps réel sont un add-on payant : le plan gratuit les actualise avec un léger retard.
 - Les données (utilisateurs, premium, paiements en attente) sont dans `data.json`. Sauvegarde ce fichier de temps en temps.
 - Le moteur de prédiction se base sur les 5 derniers matchs de chaque équipe : forme, attaque, défense, avantage du terrain.
+- L'ancienne version (API-Football + MongoDB) reste dans `football-bot/` si tu veux comparer.
